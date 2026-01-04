@@ -1,0 +1,33 @@
+name: Run NSE Entry Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests pymongo bs4
+
+      # ----------------------------
+      # Step 1: Live Entry Snapshot
+      # ----------------------------
+      - name: Run entry point script
+        env:
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+        run: |
+          python get_entry_point.py
