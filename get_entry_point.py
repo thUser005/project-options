@@ -240,8 +240,37 @@ def process():
     client.close()
     print("\n✅ Structural symbols saved to MongoDB")
 
-# =====================================================
-# ENTRY
-# =====================================================
-if __name__ == "__main__":
-    process()
+
+from datetime import datetime, time, timedelta
+import time as time_module
+import pytz
+
+# =========================
+# CONFIG
+# =========================
+RUN_TIME = time(9, 15)          # 09:15 AM
+TIMEZONE = pytz.timezone("Asia/Kolkata")
+TESTING = False                # 👈 change to True for testing
+
+# =========================
+# YOUR MAIN LOGIC
+# =========================
+def process():
+    print("🚀 process() started at:", datetime.now(TIMEZONE))
+
+
+# =========================
+# TIME CONTROLLER
+# =========================
+def wait_until_run_time():
+    now = datetime.now(TIMEZONE)
+    today_run_dt = TIMEZONE.localize(
+        datetime.combine(now.date(), RUN_TIME)
+    )
+
+    # If current time is before 09:15 → wait
+    if now < today_run_dt:
+        wait_seconds = (today_run_dt - now).total_seconds()
+        mins = round(wait_seconds / 60, 2)
+        print(f"⏳ Waiting {mins} minutes until 09:15 AM...")
+        time
