@@ -11,44 +11,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+from datetime import time as dtime
 
+RUN_TIME = dtime(9, 15)
+TIMEZONE = pytz.timezone("Asia/Kolkata")
+
+load_dotenv()
 testing_flag = False
+
 # =====================================================
 # CONFIG
 # =====================================================
 UNDERLYINGS = {
-    "NIFTY": {
-        "url": "https://groww.in/options/nifty",
-        "strike_step": 50,
-        "exchange": "NSE"
-    },
-    "BANKNIFTY": {
-        "url": "https://groww.in/options/nifty-bank",
-        "strike_step": 100,
-        "exchange": "NSE"
-    },
-    "FINNIFTY": {
-        "url": "https://groww.in/options/nifty-financial-services",
-        "strike_step": 50,
-        "exchange": "NSE"
-    },
-    "MIDCPNIFTY": {
-        "url": "https://groww.in/options/nifty-midcap-select",
-        "strike_step": 25,
-        "exchange": "NSE"
-    },
-    "SENSEX": {
-        "url": "https://groww.in/options/sp-bse-sensex",
-        "strike_step": 100,
-        "exchange": "BSE",
-        "index_symbol": "1"
-    },
-    "BANKEX": {
-        "url": "https://groww.in/options/sp-bse-bankex",
-        "strike_step": 100,
-        "exchange": "BSE",
-        "index_symbol": "14"
-    }
+    "NIFTY": {"url": "https://groww.in/options/nifty", "strike_step": 50, "exchange": "NSE"},
+    "BANKNIFTY": {"url": "https://groww.in/options/nifty-bank", "strike_step": 100, "exchange": "NSE"},
+    "FINNIFTY": {"url": "https://groww.in/options/nifty-financial-services", "strike_step": 50, "exchange": "NSE"},
+    "MIDCPNIFTY": {"url": "https://groww.in/options/nifty-midcap-select", "strike_step": 25, "exchange": "NSE"},
+    "SENSEX": {"url": "https://groww.in/options/sp-bse-sensex", "strike_step": 100, "exchange": "BSE", "index_symbol": "1"},
+    "BANKEX": {"url": "https://groww.in/options/sp-bse-bankex", "strike_step": 100, "exchange": "BSE", "index_symbol": "14"},
 }
 
 STRIKE_WINDOW_POINTS = {
@@ -60,11 +41,8 @@ STRIKE_WINDOW_POINTS = {
     "BANKEX": 6000,
 }
 
-# 🔹 NEW: expiry limit
 MAX_EXPIRIES_PER_UNDERLYING = 4
-
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
-
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
@@ -113,8 +91,36 @@ IST = pytz.timezone("Asia/Kolkata")
 UPSTOX_URL = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"
 DOWNLOAD_DIR = "downloads"
 
+def wait_until_run_time(max_wait_minutes=120):
+    now = datetime.now(TIMEZONE)
+    run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
+
+    # If already past run time → run immediately
+    if now >= run_dt:
+        print("⏩ Past run time → executing immediately")
+        return True
+
+    delta_sec = (run_dt - now).total_seconds()
+    delta_min = delta_sec / 60
+
+    # If too early → exit (workflow will retry later)
+    if delta_min > max_wait_minutes:
+        print(
+            f"⏭️ Too early ({int(delta_min)} min before run time). "
+            f"Exiting and waiting for next scheduled run."
+        )
+        return False
+
+    # Otherwise wait
+    print(
+        f"⏳ Waiting {int(delta_min)} minutes until "
+        f"{RUN_TIME.strftime('%H:%M')} IST"
+    )
+    time.sleep(delta_sec)
+    return True
+
 # =====================================================
-# UPSTOX FILE DOWNLOAD (UNCHANGED)
+# UPSTOX FILE DOWNLOAD
 # =====================================================
 def fetch_upstox_instruments():
     Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
@@ -124,9 +130,7 @@ def fetch_upstox_instruments():
     json_path = gz_path.replace(".gz", "")
 
     if not os.path.exists(json_path):
-        if os.path.exists(gz_path):
-            os.remove(gz_path)
-
+        print("⬇️ Downloading Upstox master file...")
         with requests.get(UPSTOX_URL, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(gz_path, "wb") as f:
@@ -140,9 +144,11 @@ def fetch_upstox_instruments():
             json.dump(data, f)
 
         os.remove(gz_path)
+        print(f"✅ Upstox master downloaded ({len(data)} instruments)")
     else:
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        print(f"📦 Using cached Upstox master ({len(data)} instruments)")
 
     return data
 
@@ -156,12 +162,13 @@ def build_trading_symbol_map():
                 "instrument_key": d.get("instrument_key"),
                 "exchange_token": d.get("exchange_token")
             }
+    print(f"🔗 Trading symbols mapped: {len(mp)}")
     return mp
 
 UPSTOX_SYMBOL_MAP = build_trading_symbol_map()
 
 # =====================================================
-# CORE HELPERS (UNCHANGED)
+# CORE HELPERS
 # =====================================================
 def fetch_html(url: str) -> str:
     for _ in range(MAX_RETRIES):
@@ -174,6 +181,7 @@ def fetch_html(url: str) -> str:
     raise RuntimeError(f"Failed HTML fetch: {url}")
 
 def fetch_live_indexes() -> dict:
+    print("📡 Fetching live index prices...")
     payload = {
         "exchangeAggReqMap": {
             "NSE": {"priceSymbolList": [], "indexSymbolList": ["NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTYMIDSELECT"]},
@@ -188,6 +196,8 @@ def fetch_live_indexes() -> dict:
     for ex in r.json()["exchangeAggRespMap"].values():
         for idx, v in ex["indexLivePointsMap"].items():
             out[idx] = v["value"]
+
+    print(f"✅ Live indices fetched: {len(out)}")
     return out
 
 def extract_texts(html: str) -> List[str]:
@@ -211,11 +221,13 @@ def parse_expiry(text: str, now: datetime):
 def extract_strikes(expiry_url: str) -> List[int]:
     html = fetch_html(expiry_url)
     texts = extract_texts(html)
-    return sorted({
+    strikes = sorted({
         int(t.replace(",", ""))
         for t in texts
         if re.fullmatch(r"\d{1,3}(,\d{3})+", t)
     })
+    print(f"   🎯 Strikes fetched: {len(strikes)}")
+    return strikes
 
 def build_trading_symbol(symbol: str, expiry_key: str) -> str:
     year, month, day = expiry_key.split("-")
@@ -241,6 +253,7 @@ def build_symbols(underlying, exp, expiry_key, strikes):
                 "instrument_key": ref.get("instrument_key"),
                 "exchange_token": ref.get("exchange_token")
             })
+    print(f"   🧩 Symbols generated: {len(out)}")
     return out
 
 # =====================================================
@@ -253,6 +266,8 @@ def process_single_expiry(name, cfg, txt, now, atm, window):
 
     strikes = extract_strikes(f"{cfg['url']}?expiry={exp['expiry_key']}")
     filtered = [s for s in strikes if abs(s - atm) <= window]
+    print(f"   📉 Filtered strikes: {len(filtered)} (ATM window)")
+
     if not filtered:
         return None, None
 
@@ -263,46 +278,51 @@ def process_single_expiry(name, cfg, txt, now, atm, window):
     }
 
 # =====================================================
-# CORE SYMBOL BUILDER (PARALLELIZED)
+# CORE SYMBOL BUILDER
 # =====================================================
 def process_symbols():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST)
     live_index = fetch_live_indexes()
 
     client = MongoClient(MONGO_URL)
     col = client[DB_NAME][COLLECTION_NAME]
 
     final = {}
+    total_expiries = 0
+    total_symbols = 0
 
     for name, cfg in UNDERLYINGS.items():
         print(f"\n=== {name} ===")
 
         spot = live_index.get(cfg.get("index_symbol", name))
         if not spot:
+            print("❌ Spot not found")
             continue
 
         step = cfg["strike_step"]
         atm = round(spot / step) * step
-        window = STRIKE_WINDOW_POINTS[name]
+        print(f"📊 Spot={spot}, ATM={atm}")
 
         html = fetch_html(cfg["url"])
         expiry_texts = list(dict.fromkeys(extract_texts(html)))
 
-        # 🔹 NEW: sort & limit expiries
         parsed = []
         for txt in expiry_texts:
             exp = parse_expiry(txt, now)
             if exp:
                 parsed.append((txt, exp["expiry_key"]))
 
+        print(f"📅 Total expiries found: {len(parsed)}")
+
         parsed.sort(key=lambda x: x[1])
         expiry_texts = [x[0] for x in parsed[:MAX_EXPIRIES_PER_UNDERLYING]]
+        print(f"📅 Expiries selected: {len(expiry_texts)}")
 
         final[name] = {}
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [
-                executor.submit(process_single_expiry, name, cfg, txt, now, atm, window)
+                executor.submit(process_single_expiry, name, cfg, txt, now, atm, STRIKE_WINDOW_POINTS[name])
                 for txt in expiry_texts
             ]
 
@@ -312,6 +332,8 @@ def process_symbols():
                     continue
                 data["spot"] = spot
                 final[name][expiry_key] = data
+                total_expiries += 1
+                total_symbols += len(data["symbols"])
 
     col.update_one(
         {"trade_date": now.strftime("%Y-%m-%d")},
@@ -319,30 +341,23 @@ def process_symbols():
         upsert=True
     )
 
+
     client.close()
     print("\n✅ Structural symbols saved to MongoDB")
+    print(f"📦 Total expiries processed: {total_expiries}")
+    print(f"🧮 Total symbols generated: {total_symbols}")
 
 # =====================================================
 # SCHEDULER (UNCHANGED)
 # =====================================================
-from datetime import time as dtime
 
-RUN_TIME = dtime(9, 15)
-TIMEZONE = pytz.timezone("Asia/Kolkata")
 
-def wait_until_run_time():
-    now = datetime.now(TIMEZONE)
-    run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
-    if now < run_dt:
-        time.sleep((run_dt - now).total_seconds())
 
-def process():
-    process_symbols()
 
-# =====================================================
-# ENTRY POINT
-# =====================================================
 if __name__ == "__main__":
-    
-    if not testing_flag:wait_until_run_time()
-    process()
+    if not testing_flag:
+        should_run = wait_until_run_time()
+        if not should_run:
+            exit(0)
+
+    process_symbols()
