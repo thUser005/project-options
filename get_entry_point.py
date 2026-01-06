@@ -12,7 +12,7 @@ from pathlib import Path
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-testing_flag = True
+testing_flag = False
 # =====================================================
 # CONFIG
 # =====================================================
