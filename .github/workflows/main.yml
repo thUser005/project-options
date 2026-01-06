@@ -21,7 +21,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pymongo bs4
+          python -m pip install --upgrade pip
+          pip install requests pymongo beautifulsoup4 pytz
 
       # ----------------------------
       # Step 1: Live Entry Snapshot

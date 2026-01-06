@@ -4,8 +4,8 @@ import time
 import json
 import requests
 from bs4 import BeautifulSoup
-from typing import List, Optional, Dict
-from pymongo import MongoClient, errors
+from typing import List
+from pymongo import MongoClient
 from datetime import datetime, timezone
 
 # =====================================================
@@ -130,7 +130,6 @@ def fetch_live_indexes() -> dict:
     data = r.json()["exchangeAggRespMap"]
 
     out = {}
-
     for ex in data.values():
         for idx, v in ex["indexLivePointsMap"].items():
             out[idx] = v["value"]
@@ -167,15 +166,12 @@ def extract_strikes(expiry_url: str) -> List[int]:
     })
 
 def build_symbols(underlying, exp, strikes):
-    symbols = []
-    for s in strikes:
-        symbols.append(f"{underlying}{exp}{s}CE")
-    return symbols
+    return [f"{underlying}{exp}{s}CE" for s in strikes]
 
 # =====================================================
-# CORE
+# CORE SYMBOL BUILDER (UNCHANGED LOGIC)
 # =====================================================
-def process():
+def process_symbols():
     now = datetime.now(timezone.utc)
     live_index = fetch_live_indexes()
 
@@ -186,20 +182,16 @@ def process():
 
     for name, cfg in UNDERLYINGS.items():
         print(f"\n=== {name} ===")
-        base_url = cfg["url"]
-        step = cfg["strike_step"]
 
-        idx_key = cfg.get("index_symbol", name)
-        spot = live_index.get(idx_key)
-
+        spot = live_index.get(cfg.get("index_symbol", name))
         if not spot:
-            print(f"❌ No live index for {name}")
             continue
 
+        step = cfg["strike_step"]
         atm = round(spot / step) * step
         window = STRIKE_WINDOW_POINTS[name]
 
-        html = fetch_html(base_url)
+        html = fetch_html(cfg["url"])
         expiry_texts = list(dict.fromkeys(extract_texts(html)))
 
         final[name] = {}
@@ -209,27 +201,16 @@ def process():
             if not exp:
                 continue
 
-            expiry_url = f"{base_url}?expiry={exp['expiry_key']}"
-            strikes = extract_strikes(expiry_url)
+            strikes = extract_strikes(f"{cfg['url']}?expiry={exp['expiry_key']}")
+            filtered = [s for s in strikes if abs(s - atm) <= window]
 
-            filtered = [
-                s for s in strikes
-                if abs(s - atm) <= window
-            ]
-
-            if not filtered:
-                continue
-
-            symbols = build_symbols(name, exp["symbol_expiry"], filtered)
-
-            final[name][exp["expiry_key"]] = {
-                "spot": spot,
-                "atm": atm,
-                "strike_step": step,
-                "symbols": symbols
-            }
-
-            print(f"[✓] {name} {exp['expiry_key']} → {len(symbols)} symbols")
+            if filtered:
+                final[name][exp["expiry_key"]] = {
+                    "spot": spot,
+                    "atm": atm,
+                    "strike_step": step,
+                    "symbols": build_symbols(name, exp["symbol_expiry"], filtered)
+                }
 
     col.update_one(
         {"trade_date": now.strftime("%Y-%m-%d")},
@@ -240,37 +221,31 @@ def process():
     client.close()
     print("\n✅ Structural symbols saved to MongoDB")
 
-
-from datetime import datetime, time, timedelta
-import time as time_module
+# =====================================================
+# SCHEDULER
+# =====================================================
+from datetime import time as dtime
 import pytz
 
-# =========================
-# CONFIG
-# =========================
-RUN_TIME = time(9, 15)          # 09:15 AM
+RUN_TIME = dtime(9, 15)
 TIMEZONE = pytz.timezone("Asia/Kolkata")
-TESTING = False                # 👈 change to True for testing
 
-# =========================
-# YOUR MAIN LOGIC
-# =========================
-def process():
-    print("🚀 process() started at:", datetime.now(TIMEZONE))
-
-
-# =========================
-# TIME CONTROLLER
-# =========================
 def wait_until_run_time():
     now = datetime.now(TIMEZONE)
-    today_run_dt = TIMEZONE.localize(
-        datetime.combine(now.date(), RUN_TIME)
-    )
+    run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
 
-    # If current time is before 09:15 → wait
-    if now < today_run_dt:
-        wait_seconds = (today_run_dt - now).total_seconds()
-        mins = round(wait_seconds / 60, 2)
-        print(f"⏳ Waiting {mins} minutes until 09:15 AM...")
-        time
+    if now < run_dt:
+        wait_seconds = (run_dt - now).total_seconds()
+        print(f"⏳ Waiting {round(wait_seconds / 60, 2)} minutes...")
+        time.sleep(wait_seconds)
+
+def process():
+    print("🚀 process() started at:", datetime.now(TIMEZONE))
+    process_symbols()
+
+# =====================================================
+# ENTRY POINT
+# =====================================================
+if __name__ == "__main__":
+    wait_until_run_time()
+    process()
