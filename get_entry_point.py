@@ -2,11 +2,14 @@ import os
 import re
 import time
 import json
+import gzip
 import requests
 from bs4 import BeautifulSoup
 from typing import List
 from pymongo import MongoClient
 from datetime import datetime, timezone
+from pathlib import Path
+import pytz
 
 # =====================================================
 # CONFIG
@@ -101,6 +104,65 @@ MONTH_MAP = {
     "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12"
 }
 
+IST = pytz.timezone("Asia/Kolkata")
+UPSTOX_URL = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"
+DOWNLOAD_DIR = "downloads"
+
+# =====================================================
+# UPSTOX FILE DOWNLOAD (LOGIC REUSED ONLY)
+# =====================================================
+def fetch_upstox_instruments():
+    Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
+
+    date_str = datetime.now(IST).strftime("%Y%m%d")
+    gz_path = f"{DOWNLOAD_DIR}/complete_{date_str}.json.gz"
+    json_path = gz_path.replace(".gz", "")
+
+    if not os.path.exists(json_path):
+        if os.path.exists(gz_path):
+            os.remove(gz_path)
+
+        with requests.get(UPSTOX_URL, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(gz_path, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+
+        with gzip.open(gz_path, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        os.remove(gz_path)
+    else:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    return data
+
+# =====================================================
+# BUILD TRADING SYMBOL MAP
+# =====================================================
+def build_trading_symbol_map():
+    data = fetch_upstox_instruments()
+    mp = {}
+
+    for d in data:
+        ts = d.get("trading_symbol")
+        if ts:
+            mp[ts] = {
+                "instrument_key": d.get("instrument_key"),
+                "exchange_token": d.get("exchange_token")
+            }
+
+    return mp
+
+UPSTOX_SYMBOL_MAP = build_trading_symbol_map()
+
+# =====================================================
+# CORE HELPERS (UNCHANGED)
+# =====================================================
 def fetch_html(url: str) -> str:
     for _ in range(MAX_RETRIES):
         try:
@@ -165,12 +227,7 @@ def extract_strikes(expiry_url: str) -> List[int]:
         if re.fullmatch(r"\d{1,3}(,\d{3})+", t)
     })
 
-# ================= NEW HELPER (SAFE ADDITION) =================
 def build_trading_symbol(symbol: str, expiry_key: str) -> str:
-    """
-    NIFTY26JAN24350CE + 2026-01-13
-    → NIFTY 24350 CE 13 JAN 26
-    """
     year, month, day = expiry_key.split("-")
     mon = list(MONTH_MAP.keys())[list(MONTH_MAP.values()).index(month)]
     yy = year[-2:]
@@ -182,15 +239,23 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
     underlying, strike, opt_type = m.groups()
     return f"{underlying} {strike} {opt_type} {day} {mon} {yy}"
 
-# ================= MODIFIED (STRUCTURE ONLY) =================
+# ================= ENRICHED SYMBOL BUILDER =================
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
+
     for s in strikes:
         symbol = f"{underlying}{exp}{s}CE"
+        trading_symbol = build_trading_symbol(symbol, expiry_key)
+
+        ref = UPSTOX_SYMBOL_MAP.get(trading_symbol, {})
+
         out.append({
             "symbol": symbol,
-            "trading_symbol": build_trading_symbol(symbol, expiry_key)
+            "trading_symbol": trading_symbol,
+            "instrument_key": ref.get("instrument_key"),
+            "exchange_token": ref.get("exchange_token")
         })
+
     return out
 
 # =====================================================
@@ -252,10 +317,9 @@ def process_symbols():
     print("\n✅ Structural symbols saved to MongoDB")
 
 # =====================================================
-# SCHEDULER
+# SCHEDULER (UNCHANGED)
 # =====================================================
 from datetime import time as dtime
-import pytz
 
 RUN_TIME = dtime(9, 15)
 TIMEZONE = pytz.timezone("Asia/Kolkata")
@@ -265,12 +329,9 @@ def wait_until_run_time():
     run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
 
     if now < run_dt:
-        wait_seconds = (run_dt - now).total_seconds()
-        print(f"⏳ Waiting {round(wait_seconds / 60, 2)} minutes...")
-        time.sleep(wait_seconds)
+        time.sleep((run_dt - now).total_seconds())
 
 def process():
-    print("🚀 process() started at:", datetime.now(TIMEZONE))
     process_symbols()
 
 # =====================================================
