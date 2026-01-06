@@ -12,6 +12,7 @@ from pathlib import Path
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+testing_flag = True
 # =====================================================
 # CONFIG
 # =====================================================
@@ -342,5 +343,6 @@ def process():
 # ENTRY POINT
 # =====================================================
 if __name__ == "__main__":
-    wait_until_run_time()
+    
+    if not testing_flag:wait_until_run_time()
     process()
