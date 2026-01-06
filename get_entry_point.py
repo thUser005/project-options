@@ -59,6 +59,9 @@ STRIKE_WINDOW_POINTS = {
     "BANKEX": 6000,
 }
 
+# 🔹 NEW: expiry limit
+MAX_EXPIRIES_PER_UNDERLYING = 4
+
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
 
 MAX_RETRIES = 3
@@ -225,14 +228,11 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
 
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
-
     for s in strikes:
         for opt_type in ("CE", "PE"):
             symbol = f"{underlying}{exp}{s}{opt_type}"
             ts = build_trading_symbol(symbol, expiry_key)
-
             ref = UPSTOX_SYMBOL_MAP.get(ts, {})
-
             out.append({
                 "symbol": symbol,
                 "trading_symbol": ts,
@@ -240,9 +240,7 @@ def build_symbols(underlying, exp, expiry_key, strikes):
                 "instrument_key": ref.get("instrument_key"),
                 "exchange_token": ref.get("exchange_token")
             })
-
     return out
-
 
 # =====================================================
 # PARALLEL EXPIRY WORKER
@@ -288,6 +286,16 @@ def process_symbols():
 
         html = fetch_html(cfg["url"])
         expiry_texts = list(dict.fromkeys(extract_texts(html)))
+
+        # 🔹 NEW: sort & limit expiries
+        parsed = []
+        for txt in expiry_texts:
+            exp = parse_expiry(txt, now)
+            if exp:
+                parsed.append((txt, exp["expiry_key"]))
+
+        parsed.sort(key=lambda x: x[1])
+        expiry_texts = [x[0] for x in parsed[:MAX_EXPIRIES_PER_UNDERLYING]]
 
         final[name] = {}
 
