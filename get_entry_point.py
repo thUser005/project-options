@@ -165,11 +165,36 @@ def extract_strikes(expiry_url: str) -> List[int]:
         if re.fullmatch(r"\d{1,3}(,\d{3})+", t)
     })
 
-def build_symbols(underlying, exp, strikes):
-    return [f"{underlying}{exp}{s}CE" for s in strikes]
+# ================= NEW HELPER (SAFE ADDITION) =================
+def build_trading_symbol(symbol: str, expiry_key: str) -> str:
+    """
+    NIFTY26JAN24350CE + 2026-01-13
+    → NIFTY 24350 CE 13 JAN 26
+    """
+    year, month, day = expiry_key.split("-")
+    mon = list(MONTH_MAP.keys())[list(MONTH_MAP.values()).index(month)]
+    yy = year[-2:]
+
+    m = re.match(r"([A-Z]+)\d{2}[A-Z]{3}(\d+)(CE|PE)", symbol)
+    if not m:
+        return None
+
+    underlying, strike, opt_type = m.groups()
+    return f"{underlying} {strike} {opt_type} {day} {mon} {yy}"
+
+# ================= MODIFIED (STRUCTURE ONLY) =================
+def build_symbols(underlying, exp, expiry_key, strikes):
+    out = []
+    for s in strikes:
+        symbol = f"{underlying}{exp}{s}CE"
+        out.append({
+            "symbol": symbol,
+            "trading_symbol": build_trading_symbol(symbol, expiry_key)
+        })
+    return out
 
 # =====================================================
-# CORE SYMBOL BUILDER (UNCHANGED LOGIC)
+# CORE SYMBOL BUILDER (LOGIC UNCHANGED)
 # =====================================================
 def process_symbols():
     now = datetime.now(timezone.utc)
@@ -209,7 +234,12 @@ def process_symbols():
                     "spot": spot,
                     "atm": atm,
                     "strike_step": step,
-                    "symbols": build_symbols(name, exp["symbol_expiry"], filtered)
+                    "symbols": build_symbols(
+                        name,
+                        exp["symbol_expiry"],
+                        exp["expiry_key"],
+                        filtered
+                    )
                 }
 
     col.update_one(
