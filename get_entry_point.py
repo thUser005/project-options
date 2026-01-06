@@ -225,17 +225,24 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
 
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
+
     for s in strikes:
-        symbol = f"{underlying}{exp}{s}CE"
-        ts = build_trading_symbol(symbol, expiry_key)
-        ref = UPSTOX_SYMBOL_MAP.get(ts, {})
-        out.append({
-            "symbol": symbol,
-            "trading_symbol": ts,
-            "instrument_key": ref.get("instrument_key"),
-            "exchange_token": ref.get("exchange_token")
-        })
+        for opt_type in ("CE", "PE"):
+            symbol = f"{underlying}{exp}{s}{opt_type}"
+            ts = build_trading_symbol(symbol, expiry_key)
+
+            ref = UPSTOX_SYMBOL_MAP.get(ts, {})
+
+            out.append({
+                "symbol": symbol,
+                "trading_symbol": ts,
+                "option_type": opt_type,
+                "instrument_key": ref.get("instrument_key"),
+                "exchange_token": ref.get("exchange_token")
+            })
+
     return out
+
 
 # =====================================================
 # PARALLEL EXPIRY WORKER
