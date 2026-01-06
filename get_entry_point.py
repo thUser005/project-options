@@ -10,7 +10,6 @@ from pymongo import MongoClient
 from datetime import datetime, timezone
 from pathlib import Path
 import pytz
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # =====================================================
 # CONFIG
@@ -110,7 +109,7 @@ UPSTOX_URL = "https://assets.upstox.com/market-quote/instruments/exchange/comple
 DOWNLOAD_DIR = "downloads"
 
 # =====================================================
-# UPSTOX FILE DOWNLOAD (UNCHANGED)
+# UPSTOX FILE DOWNLOAD (LOGIC REUSED ONLY)
 # =====================================================
 def fetch_upstox_instruments():
     Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
@@ -142,9 +141,13 @@ def fetch_upstox_instruments():
 
     return data
 
+# =====================================================
+# BUILD TRADING SYMBOL MAP
+# =====================================================
 def build_trading_symbol_map():
     data = fetch_upstox_instruments()
     mp = {}
+
     for d in data:
         ts = d.get("trading_symbol")
         if ts:
@@ -152,6 +155,7 @@ def build_trading_symbol_map():
                 "instrument_key": d.get("instrument_key"),
                 "exchange_token": d.get("exchange_token")
             }
+
     return mp
 
 UPSTOX_SYMBOL_MAP = build_trading_symbol_map()
@@ -172,18 +176,26 @@ def fetch_html(url: str) -> str:
 def fetch_live_indexes() -> dict:
     payload = {
         "exchangeAggReqMap": {
-            "NSE": {"priceSymbolList": [], "indexSymbolList": ["NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTYMIDSELECT"]},
-            "BSE": {"priceSymbolList": [], "indexSymbolList": ["1", "14"]}
+            "NSE": {
+                "priceSymbolList": [],
+                "indexSymbolList": ["NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTYMIDSELECT"]
+            },
+            "BSE": {
+                "priceSymbolList": [],
+                "indexSymbolList": ["1", "14"]
+            }
         }
     }
 
     r = requests.post(INDEX_URL, headers=HEADERS_API, json=payload, timeout=10)
     r.raise_for_status()
+    data = r.json()["exchangeAggRespMap"]
 
     out = {}
-    for ex in r.json()["exchangeAggRespMap"].values():
+    for ex in data.values():
         for idx, v in ex["indexLivePointsMap"].items():
             out[idx] = v["value"]
+
     return out
 
 def extract_texts(html: str) -> List[str]:
@@ -194,10 +206,12 @@ def parse_expiry(text: str, now: datetime):
     p = text.split()
     if len(p) != 2:
         return None
+
     day, mon = p
     mon = mon.upper()
     if mon not in MONTH_MAP:
         return None
+
     year = now.year + (1 if int(MONTH_MAP[mon]) < now.month else 0)
     return {
         "expiry_key": f"{year}-{MONTH_MAP[mon]}-{day.zfill(2)}",
@@ -217,47 +231,35 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
     year, month, day = expiry_key.split("-")
     mon = list(MONTH_MAP.keys())[list(MONTH_MAP.values()).index(month)]
     yy = year[-2:]
+
     m = re.match(r"([A-Z]+)\d{2}[A-Z]{3}(\d+)(CE|PE)", symbol)
     if not m:
         return None
-    u, s, t = m.groups()
-    return f"{u} {s} {t} {day} {mon} {yy}"
 
+    underlying, strike, opt_type = m.groups()
+    return f"{underlying} {strike} {opt_type} {day} {mon} {yy}"
+
+# ================= ENRICHED SYMBOL BUILDER =================
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
+
     for s in strikes:
         symbol = f"{underlying}{exp}{s}CE"
-        ts = build_trading_symbol(symbol, expiry_key)
-        ref = UPSTOX_SYMBOL_MAP.get(ts, {})
+        trading_symbol = build_trading_symbol(symbol, expiry_key)
+
+        ref = UPSTOX_SYMBOL_MAP.get(trading_symbol, {})
+
         out.append({
             "symbol": symbol,
-            "trading_symbol": ts,
+            "trading_symbol": trading_symbol,
             "instrument_key": ref.get("instrument_key"),
             "exchange_token": ref.get("exchange_token")
         })
+
     return out
 
 # =====================================================
-# PARALLEL EXPIRY WORKER
-# =====================================================
-def process_single_expiry(name, cfg, txt, now, atm, window):
-    exp = parse_expiry(txt, now)
-    if not exp:
-        return None, None
-
-    strikes = extract_strikes(f"{cfg['url']}?expiry={exp['expiry_key']}")
-    filtered = [s for s in strikes if abs(s - atm) <= window]
-    if not filtered:
-        return None, None
-
-    return exp["expiry_key"], {
-        "atm": atm,
-        "strike_step": cfg["strike_step"],
-        "symbols": build_symbols(name, exp["symbol_expiry"], exp["expiry_key"], filtered)
-    }
-
-# =====================================================
-# CORE SYMBOL BUILDER (PARALLELIZED)
+# CORE SYMBOL BUILDER (LOGIC UNCHANGED)
 # =====================================================
 def process_symbols():
     now = datetime.now(timezone.utc)
@@ -284,18 +286,26 @@ def process_symbols():
 
         final[name] = {}
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [
-                executor.submit(process_single_expiry, name, cfg, txt, now, atm, window)
-                for txt in expiry_texts
-            ]
+        for txt in expiry_texts:
+            exp = parse_expiry(txt, now)
+            if not exp:
+                continue
 
-            for f in as_completed(futures):
-                expiry_key, data = f.result()
-                if not expiry_key:
-                    continue
-                data["spot"] = spot
-                final[name][expiry_key] = data
+            strikes = extract_strikes(f"{cfg['url']}?expiry={exp['expiry_key']}")
+            filtered = [s for s in strikes if abs(s - atm) <= window]
+
+            if filtered:
+                final[name][exp["expiry_key"]] = {
+                    "spot": spot,
+                    "atm": atm,
+                    "strike_step": step,
+                    "symbols": build_symbols(
+                        name,
+                        exp["symbol_expiry"],
+                        exp["expiry_key"],
+                        filtered
+                    )
+                }
 
     col.update_one(
         {"trade_date": now.strftime("%Y-%m-%d")},
@@ -317,6 +327,7 @@ TIMEZONE = pytz.timezone("Asia/Kolkata")
 def wait_until_run_time():
     now = datetime.now(TIMEZONE)
     run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
+
     if now < run_dt:
         time.sleep((run_dt - now).total_seconds())
 
