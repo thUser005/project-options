@@ -18,7 +18,7 @@ RUN_TIME = dtime(9, 15)
 TIMEZONE = pytz.timezone("Asia/Kolkata")
 
 load_dotenv()
-testing_flag = False
+testing_flag = True
 
 # =====================================================
 # CONFIG
