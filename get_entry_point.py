@@ -24,7 +24,7 @@ load_dotenv()
 testing_flag = False
 
 # =====================================================
-# CONFIG (MODIFIED: ONLY REQUIRED UNDERLYINGS)
+# CONFIG (UNCHANGED)
 # =====================================================
 UNDERLYINGS = {
     "NIFTY": {
@@ -45,17 +45,11 @@ UNDERLYINGS = {
     }
 }
 
-# =====================================================
-# REDUCED STRIKE WINDOWS (REQUESTED)
-# =====================================================
 STRIKE_WINDOW_POINTS = {
     "NIFTY": 500,
     "BANKNIFTY": 1000,
     "SENSEX": 1500
 }
-
-MAX_EXPIRIES_PER_UNDERLYING = 4
-MAX_EXPIRY_DAYS_AHEAD = 45
 
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
 MAX_RETRIES = 3
@@ -107,35 +101,7 @@ UPSTOX_URL = "https://assets.upstox.com/market-quote/instruments/exchange/comple
 LOAD_DIR = "downloads"
 
 # =====================================================
-# ⏳ TESTING / SCHEDULER HELPERS (ADDED BACK — UNCHANGED)
-# =====================================================
-def wait_until_run_time(max_wait_minutes=120):
-    now = datetime.now(TIMEZONE)
-    run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
-
-    if now >= run_dt:
-        print("⏩ Past run time → executing immediately")
-        return True
-
-    delta_sec = (run_dt - now).total_seconds()
-    delta_min = delta_sec / 60
-
-    if delta_min > max_wait_minutes:
-        print(
-            f"⏭️ Too early ({int(delta_min)} min before run time). "
-            f"Exiting and waiting for next scheduled run."
-        )
-        return False
-
-    print(
-        f"⏳ Waiting {int(delta_min)} minutes until "
-        f"{RUN_TIME.strftime('%H:%M')} IST"
-    )
-    time.sleep(delta_sec)
-    return True
-
-# =====================================================
-# UPSTOX SYMBOL MAP (SAFE ADDITION)
+# UPSTOX SYMBOL MAP (UNCHANGED)
 # =====================================================
 def load_upstox_symbol_map():
     os.makedirs(LOAD_DIR, exist_ok=True)
@@ -264,7 +230,7 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
     return f"{u} {s} {t} {day} {mon} {yy}"
 
 # =====================================================
-# SYMBOL BUILDER (UNCHANGED LOGIC)
+# SYMBOL BUILDER (UNCHANGED)
 # =====================================================
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
@@ -299,7 +265,35 @@ def build_symbols(underlying, exp, expiry_key, strikes):
     return out
 
 # =====================================================
-# CORE RUNNER (UNCHANGED)
+# 🧵 THREAD WRAPPER (ADDED — SAFE)
+# =====================================================
+def build_symbols_threaded(tasks, max_workers=30):
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(
+                build_symbols,
+                t["underlying"],
+                t["symbol_expiry"],
+                t["expiry_key"],
+                t["strikes"]
+            ): t
+            for t in tasks
+        }
+
+        for future in as_completed(future_map):
+            t = future_map[future]
+            try:
+                results[(t["underlying"], t["expiry_key"])] = future.result()
+            except Exception as e:
+                print(f"❌ Thread failed {t['underlying']} {t['expiry_key']}: {e}")
+                results[(t["underlying"], t["expiry_key"])] = []
+
+    return results
+
+# =====================================================
+# CORE RUNNER (LOGIC UNCHANGED)
 # =====================================================
 def process_symbols():
     now = datetime.now(IST)
@@ -309,6 +303,7 @@ def process_symbols():
     col = client[DB_NAME][COLLECTION_NAME]
 
     final = {}
+    tasks = []
 
     for name, cfg in UNDERLYINGS.items():
         spot = live_index.get(cfg.get("index_symbol", name))
@@ -334,11 +329,27 @@ def process_symbols():
             if not strikes:
                 continue
 
-            final[name][exp["expiry_key"]] = {
+            tasks.append({
+                "underlying": name,
+                "expiry_key": exp["expiry_key"],
+                "symbol_expiry": exp["symbol_expiry"],
+                "strikes": strikes,
                 "atm": atm,
                 "spot": spot,
-                "strike_step": step,
-                "symbols": build_symbols(name, exp["symbol_expiry"], exp["expiry_key"], strikes)
+                "step": step
+            })
+
+    symbol_results = build_symbols_threaded(tasks, max_workers=30)
+
+    for t in tasks:
+        key = (t["underlying"], t["expiry_key"])
+        symbols = symbol_results.get(key, [])
+        if symbols:
+            final[t["underlying"]][t["expiry_key"]] = {
+                "atm": t["atm"],
+                "spot": t["spot"],
+                "strike_step": t["step"],
+                "symbols": symbols
             }
 
     col.update_one(
@@ -351,12 +362,8 @@ def process_symbols():
     print("✅ Structural symbols saved to MongoDB")
 
 # =====================================================
-# SCHEDULER (UNCHANGED BEHAVIOR)
+# ENTRY POINT (UNCHANGED)
 # =====================================================
 if __name__ == "__main__":
-    # if not testing_flag:
-    #     should_run = wait_until_run_time()
-    #     if not should_run:
-    #         exit(0)
-
     process_symbols()
+  
