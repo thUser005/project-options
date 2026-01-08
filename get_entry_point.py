@@ -185,9 +185,9 @@ def fetch_day_high_low(option_id: str):
             j = r.json()
 
             return (
-                j.get("open"),
                 j.get("high"),
                 j.get("low"),
+                j.get("open"),                
                 j.get("close"),
                 True,   # market_open (LIVE endpoint)
             )
@@ -282,10 +282,12 @@ def build_symbols(underlying, exp, expiry_key, strikes):
                 opt = get_option_id(ts) if ts else None
                 option_id = opt.get("id") if opt else None
 
-                dh, dl, mo = fetch_day_high_low(option_id)
+                dh, dl,open_value,close_value, mo = fetch_day_high_low(option_id)
 
                 out.append({
                     "id": option_id,
+                    "open":open_value,
+                    "close":close_value,
                     "title": opt.get("title") if opt else None,
                     "trading_symbol": ts,
                     "option_type": opt_type,
