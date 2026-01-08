@@ -7,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from typing import List
 from pymongo import MongoClient
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +18,7 @@ RUN_TIME = dtime(9, 15)
 TIMEZONE = pytz.timezone("Asia/Kolkata")
 
 load_dotenv()
-testing_flag = False
+testing_flag = True
 
 # =====================================================
 # CONFIG
@@ -41,7 +41,9 @@ STRIKE_WINDOW_POINTS = {
     "BANKEX": 6000,
 }
 
-MAX_EXPIRIES_PER_UNDERLYING = 4
+MAX_EXPIRIES_PER_UNDERLYING = 4  # kept as-is (unused)
+MAX_EXPIRY_DAYS_AHEAD = 45       # ✅ NEW (only functional change)
+
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -95,7 +97,6 @@ def wait_until_run_time(max_wait_minutes=120):
     now = datetime.now(TIMEZONE)
     run_dt = TIMEZONE.localize(datetime.combine(now.date(), RUN_TIME))
 
-    # If already past run time → run immediately
     if now >= run_dt:
         print("⏩ Past run time → executing immediately")
         return True
@@ -103,7 +104,6 @@ def wait_until_run_time(max_wait_minutes=120):
     delta_sec = (run_dt - now).total_seconds()
     delta_min = delta_sec / 60
 
-    # If too early → exit (workflow will retry later)
     if delta_min > max_wait_minutes:
         print(
             f"⏭️ Too early ({int(delta_min)} min before run time). "
@@ -111,7 +111,6 @@ def wait_until_run_time(max_wait_minutes=120):
         )
         return False
 
-    # Otherwise wait
     print(
         f"⏳ Waiting {int(delta_min)} minutes until "
         f"{RUN_TIME.strftime('%H:%M')} IST"
@@ -315,8 +314,15 @@ def process_symbols():
         print(f"📅 Total expiries found: {len(parsed)}")
 
         parsed.sort(key=lambda x: x[1])
-        expiry_texts = [x[0] for x in parsed[:MAX_EXPIRIES_PER_UNDERLYING]]
-        print(f"📅 Expiries selected: {len(expiry_texts)}")
+
+        today = now.date()
+        expiry_texts = []
+        for txt, expiry_key in parsed:
+            expiry_date = datetime.strptime(expiry_key, "%Y-%m-%d").date()
+            if expiry_date <= today + timedelta(days=MAX_EXPIRY_DAYS_AHEAD):
+                expiry_texts.append(txt)
+
+        print(f"📅 Expiries selected (≤ {MAX_EXPIRY_DAYS_AHEAD} days): {len(expiry_texts)}")
 
         final[name] = {}
 
@@ -341,19 +347,14 @@ def process_symbols():
         upsert=True
     )
 
-
     client.close()
     print("\n✅ Structural symbols saved to MongoDB")
     print(f"📦 Total expiries processed: {total_expiries}")
     print(f"🧮 Total symbols generated: {total_symbols}")
 
 # =====================================================
-# SCHEDULER (UNCHANGED)
+# SCHEDULER
 # =====================================================
-
-
-
-
 if __name__ == "__main__":
     if not testing_flag:
         should_run = wait_until_run_time()
