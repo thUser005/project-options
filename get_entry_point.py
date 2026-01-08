@@ -14,11 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from datetime import time as dtime
 
+# ✅ ONLY NEW IMPORT
+from get_option import get_option_id
+
 RUN_TIME = dtime(9, 15)
 TIMEZONE = pytz.timezone("Asia/Kolkata")
 
 load_dotenv()
-testing_flag = False
+testing_flag = True
 
 # =====================================================
 # CONFIG
@@ -41,8 +44,8 @@ STRIKE_WINDOW_POINTS = {
     "BANKEX": 6000,
 }
 
-MAX_EXPIRIES_PER_UNDERLYING = 4  # kept as-is (unused)
-MAX_EXPIRY_DAYS_AHEAD = 45       # ✅ NEW (only functional change)
+MAX_EXPIRIES_PER_UNDERLYING = 4
+MAX_EXPIRY_DAYS_AHEAD = 45
 
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
 MAX_RETRIES = 3
@@ -238,6 +241,9 @@ def build_trading_symbol(symbol: str, expiry_key: str) -> str:
     u, s, t = m.groups()
     return f"{u} {s} {t} {day} {mon} {yy}"
 
+# =====================================================
+# ✅ ONLY FUNCTION WITH ADDITION
+# =====================================================
 def build_symbols(underlying, exp, expiry_key, strikes):
     out = []
     for s in strikes:
@@ -245,13 +251,18 @@ def build_symbols(underlying, exp, expiry_key, strikes):
             symbol = f"{underlying}{exp}{s}{opt_type}"
             ts = build_trading_symbol(symbol, expiry_key)
             ref = UPSTOX_SYMBOL_MAP.get(ts, {})
+
+            opt = get_option_id(ts) if ts else None
+
             out.append({
-                "symbol": symbol,
+                "id": opt.get("id") if opt else None,
+                "title": opt.get("title") if opt else None,
                 "trading_symbol": ts,
                 "option_type": opt_type,
                 "instrument_key": ref.get("instrument_key"),
                 "exchange_token": ref.get("exchange_token")
             })
+
     print(f"   🧩 Symbols generated: {len(out)}")
     return out
 
