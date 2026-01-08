@@ -141,28 +141,62 @@ def load_upstox_symbol_map():
 UPSTOX_SYMBOL_MAP = load_upstox_symbol_map()
 
 # =====================================================
-# SAFE API CALL (UNCHANGED)
+# SAFE API CALL (MODIFIED FOR GROWW LIVE DATA)
 # =====================================================
 def fetch_day_high_low(option_id: str):
+    """
+    option_id example:
+    BANKNIFTY26JAN59400CE
+    NIFTY261K1325800CE
+    SENSEX2611583900CE
+    """
+
     if not option_id:
-        return None, None, False
+        return None, None, None, None, False
 
-    url = f"https://project-g-api.vercel.app/api/option/candles?symbol={option_id}"
+    option_id = option_id.upper()
 
+    # -----------------------------
+    # 🔁 SYMBOL → EXCHANGE MAPPING
+    # -----------------------------
+    if option_id.startswith("SENSEX"):
+        exchange = "BSE"
+        api_type = "tr_live_book"
+    else:
+        exchange = "NSE"
+        api_type = "tr_live_prices"
+
+    # -----------------------------
+    # 🔗 BUILD GROWW URL
+    # -----------------------------
+    url = (
+        f"https://groww.in/v1/api/stocks_fo_data/v1/"
+        f"{api_type}/exchange/{exchange}/segment/FNO/"
+        f"{option_id}/latest"
+    )
+
+    # -----------------------------
+    # 🔄 SAFE RETRY LOGIC
+    # -----------------------------
     for _ in range(3):
         try:
             r = requests.get(url, timeout=8)
             r.raise_for_status()
             j = r.json()
+
             return (
-                j.get("day_high"),
-                j.get("day_low"),
-                j.get("market_open", False),
+                j.get("open"),
+                j.get("high"),
+                j.get("low"),
+                j.get("close"),
+                True,   # market_open (LIVE endpoint)
             )
-        except Exception:
+
+        except Exception as e:
             time.sleep(1)
 
-    return None, None, False
+    return None, None, None, None, False
+
 
 # =====================================================
 # CORE HELPERS (UNCHANGED)
