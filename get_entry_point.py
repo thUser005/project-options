@@ -51,6 +51,9 @@ STRIKE_WINDOW_POINTS = {
     "SENSEX": 1500
 }
 
+# ✅ EXPIRY LIMIT (ADDED – REQUIRED)
+MAX_EXPIRY_DAYS_AHEAD = 45
+
 INDEX_URL = "https://groww.in/v1/api/stocks_data/v1/tr_live_delayed/segment/CASH/latest_aggregated"
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -265,7 +268,7 @@ def build_symbols(underlying, exp, expiry_key, strikes):
     return out
 
 # =====================================================
-# 🧵 THREAD WRAPPER (ADDED — SAFE)
+# 🧵 THREAD WRAPPER (UNCHANGED)
 # =====================================================
 def build_symbols_threaded(tasks, max_workers=30):
     results = {}
@@ -293,7 +296,7 @@ def build_symbols_threaded(tasks, max_workers=30):
     return results
 
 # =====================================================
-# CORE RUNNER (LOGIC UNCHANGED)
+# CORE RUNNER (LOGIC UNCHANGED, FILTER ADDED)
 # =====================================================
 def process_symbols():
     now = datetime.now(IST)
@@ -321,6 +324,12 @@ def process_symbols():
         for txt in expiry_texts:
             exp = parse_expiry(txt, now)
             if not exp:
+                continue
+
+            # ✅ EXPIRY DATE LIMIT (45 DAYS)
+            expiry_dt = datetime.strptime(exp["expiry_key"], "%Y-%m-%d").replace(tzinfo=IST)
+            days_diff = (expiry_dt - now).days
+            if days_diff < 0 or days_diff > MAX_EXPIRY_DAYS_AHEAD:
                 continue
 
             strikes = extract_strikes(f"{cfg['url']}?expiry={exp['expiry_key']}")
@@ -366,4 +375,3 @@ def process_symbols():
 # =====================================================
 if __name__ == "__main__":
     process_symbols()
-  
