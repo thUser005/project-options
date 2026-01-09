@@ -6,9 +6,9 @@ on:
 
   workflow_dispatch:
 
-  # ✅ DAILY SCHEDULE (7:00 AM IST = 1:30 AM UTC)
+  # ✅ DAILY SCHEDULE (7:00 PM IST = 1:30 PM UTC)
   schedule:
-    - cron: "30 1 * * *"
+    - cron: "30 13 * * *"
 
 jobs:
   run-pipeline:
