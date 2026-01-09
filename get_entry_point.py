@@ -257,14 +257,27 @@ def extract_strikes(expiry_url: str) -> List[int]:
     })
 
 def build_trading_symbol(symbol: str, expiry_key: str) -> str:
-    year, month, day = expiry_key.split("-")
-    mon = list(MONTH_MAP.keys())[list(MONTH_MAP.values()).index(month)]
-    yy = year[-2:]
-    m = re.match(r"([A-Z]+)\d{2}[A-Z]{3}(\d+)(CE|PE)", symbol)
-    if not m:
+    """
+    BANKNIFTY26JAN60000CE
+    -> BANKNIFTY 60000 CE 27 JAN 26
+    """
+    try:
+        year, month, day = expiry_key.split("-")
+        mon = list(MONTH_MAP.keys())[list(MONTH_MAP.values()).index(month)]
+        yy = year[-2:]
+
+        # Extract parts
+        m = re.match(r"([A-Z]+)(\d{2}[A-Z]{3})(\d+)(CE|PE)", symbol)
+        if not m:
+            return None
+
+        underlying, expiry_part, strike, opt_type = m.groups()
+
+        return f"{underlying} {strike} {opt_type} {day} {mon} {yy}"
+
+    except Exception:
         return None
-    u, s, t = m.groups()
-    return f"{u} {s} {t} {day} {mon} {yy}"
+
 
 # =====================================================
 # SYMBOL BUILDER (UNCHANGED)
